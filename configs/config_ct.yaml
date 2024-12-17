@@ -1,0 +1,73 @@
+# lightning.pytorch==2.0.9.post0
+seed_everything: 42
+trainer:
+  accelerator: gpu
+  strategy: ddp
+  devices: [0]
+  num_nodes: 1
+  precision: 32
+  logger:
+    - class_path: CSVLogger
+      init_args:
+        save_dir: logs
+        name: ct_us4x
+        version: MambaRoll
+
+  callbacks:
+    - class_path: RichProgressBar
+      init_args:
+        leave: True
+
+    - class_path: ModelCheckpoint
+      init_args:
+        every_n_epochs: 2
+        save_on_train_epoch_end: True
+        save_top_k: -1
+
+    - class_path: LearningRateMonitor
+      init_args:
+        logging_interval: step
+
+  max_epochs: 50
+  check_val_every_n_epoch: 2
+  num_sanity_val_steps: 0
+  log_every_n_steps: 1
+  inference_mode: True
+  use_distributed_sampler: True
+  sync_batchnorm: True
+
+model:
+  mode: ct
+  network: ${model_configs.MambaRoll}
+
+  lr: 2.e-4                             # Maximum Learning rate for cosine annealing
+  lr_min: 1.e-5                         # Minimum learning rate for cosine annealing
+  optim_betas: [0.9, 0.999]             # Adam optimizer betas
+  multiscale_loss: True                 # Whether to use multiscale loss
+  multiscale_loss_weight: 0.1           # Weight for multiscale loss
+  use_eval_mask: False                  # Whether to use mask during test
+
+data:
+  train_batch_size: 1
+  val_batch_size: 2
+  test_batch_size: 8
+
+  dataset_dir: ../datasets/lodopab-ct/
+  contrast: 
+  us_factor: 4
+  dataset_class: CTDataset              # Dataset class name that can be customized in datasets.py
+  num_workers: 32
+
+ckpt_path: 
+
+model_configs:
+  MambaRoll:
+    class_path: backbones.mambaroll.mambaroll.MambaRollCT
+    init_args:
+      nroll: 5
+      in_channels: 1
+      out_channels: 1
+      model_channels: [96, 48, 24]
+      scales: [0.25, 0.5, 1]
+      shuffle_factors: [4, 4, 4]
+      d_state: 64

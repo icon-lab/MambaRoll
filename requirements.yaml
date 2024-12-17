@@ -1,0 +1,25 @@
+name: mambaroll
+channels:
+  - anaconda
+  - conda-forge
+  - nvidia
+  - pytorch
+  - defaults
+dependencies:
+  - python=3.12
+  - numpy
+  - pytorch::pytorch=2.4.1
+  - torchvision=0.19.1
+  - pytorch-cuda=12.1
+  - lightning=2.4.0
+  - scikit-image
+  - matplotlib
+  - pyyaml
+  - ninja
+  - rich
+  - omegaconf
+  - pip
+  - pip:
+    - jsonargparse[signatures]>=4.27.7
+    - einops
+    - mamba-ssm==2.2.4
