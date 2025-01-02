@@ -194,7 +194,7 @@ python main.py fit \
 
 | Argument                    | Description                                                                                                                    |
 |-----------------------------|--------------------------------------------------------------------------------------------------------------------------------|
-| `--config`                  | Config file path. Available config files: 'configs/config_fastmri.yaml' and 'configs/config_ct.yaml'                           |
+| `--config`                  | Config file path. Available config files: 'configs/config_mri.yaml' and 'configs/config_ct.yaml'                           |
 | `--trainer.logger.name`     | Experiment name.                                                                                                               |
 | `--model.mode`              | Mode depending on data modality. Options: 'mri', 'ct'.                                                                      |
 | `--data.dataset_dir`        | Data set directory.                                                                                                            |
