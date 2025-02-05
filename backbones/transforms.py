@@ -87,6 +87,6 @@ class DataConsistencySinogram(nn.Module):
 
     def forward(self, x_source, s_target):
         s_source = self.radon.forward(x_source).transpose(-1,-2)
-        s_source[...,self.mask] = s_target
+        s_source[...,self.mask] = s_target - s_source[...,self.mask]
         x_source = self.iradon(s_source)
         return x_source
