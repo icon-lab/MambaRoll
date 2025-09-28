@@ -6,6 +6,11 @@ from backbones.mambaroll.ssm import SSM
 from backbones.transforms import DataConsistencyKspace, DataConsistencySinogram
 
 
+class Identity(nn.Identity):
+    def forward(self, x, *args, **kwargs):
+        return x
+
+
 class ShuffledSSM(nn.Module):
     def __init__(
         self,
@@ -56,18 +61,23 @@ class PSSM(nn.Module):
         model_channels,
         scale,
         shuffle_factor,
-        d_state
+        d_state,
+        dropout
     ):
         super().__init__()
 
-        if scale == 0.25:
+        if scale == 0.0625:
+            kernel, stride = 18, 16
+        elif scale == 0.125:
+            kernel, stride = 10, 8
+        elif scale == 0.25:
             kernel, stride = 6, 4
         elif scale == 0.5:
             kernel, stride = 4, 2
         elif scale == 1:
             kernel, stride = 3, 1
         else:
-            raise ValueError("Invalid scale. Must be one of [0.25, 0.5, 1]")
+            raise ValueError("Invalid scale. Must be one of [0.0625, 0.125, 0.25, 0.5, 1]")
         
         self.encoder = nn.Sequential(
             nn.Conv2d(
@@ -103,6 +113,7 @@ class PSSM(nn.Module):
                 padding=1
             ),
             nn.SiLU(inplace=True),
+            nn.Dropout2d(dropout),
             nn.Conv2d(
                 in_channels=model_channels,
                 out_channels=out_channels,
@@ -130,49 +141,38 @@ class MambaRoll(nn.Module):
         model_channels,
         scales,
         shuffle_factors,
-        d_state
+        d_state,
+        dropout
     ):
         super(MambaRoll, self).__init__()
         self.nroll = nroll
+        self.scales = scales
 
-        self.pssm1 = PSSM(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            model_channels=model_channels[0],
-            scale=scales[0],
-            shuffle_factor=shuffle_factors[0],
-            d_state=d_state
-        )
-
-        self.pssm2 = PSSM(
-            in_channels=in_channels*2,
-            out_channels=out_channels,
-            model_channels=model_channels[1],
-            scale=scales[1],
-            shuffle_factor=shuffle_factors[1],
-            d_state=d_state
-        )
-
-        self.pssm3 = PSSM(
-            in_channels=in_channels*4,
-            out_channels=out_channels,
-            model_channels=model_channels[2],
-            scale=scales[2],
-            shuffle_factor=shuffle_factors[2],
-            d_state=d_state
-        )        
+        self.pssms = nn.ModuleList()
+        for i in range(len(scales)):
+            self.pssms.append(
+                PSSM(
+                    in_channels=in_channels if i == 0 else (2*i+1)*in_channels,
+                    out_channels=out_channels,
+                    model_channels=model_channels[i],
+                    scale=scales[i],
+                    shuffle_factor=shuffle_factors[i],
+                    d_state=d_state,
+                    dropout=dropout
+                )
+            )
 
         self.refinement = nn.Sequential(
             nn.Conv2d(
                 in_channels=out_channels*2,
-                out_channels=model_channels[2],
+                out_channels=model_channels[-1],
                 kernel_size=3,
                 stride=1,
                 padding=1
             ),
             nn.SiLU(inplace=True),
             nn.Conv2d(
-                in_channels=model_channels[2],
+                in_channels=model_channels[-1],
                 out_channels=out_channels,
                 kernel_size=3,
                 stride=1,
@@ -187,37 +187,28 @@ class MambaRollMRI(MambaRoll):
         self.dc = DataConsistencyKspace()
 
     def forward(self, x, target, mask, coilmap):
-        B, C, H, W = x.shape
         for _ in range(self.nroll):
-            x1 = self.pssm1(
-                x,
-                dc_layer=self.dc,
-                target=target,
-                mask=mask,
-                coilmap=coilmap
-            )
+            decoder_out = []
+            for i, pssm in enumerate(self.pssms):
+                out = pssm(
+                    x,
+                    dc_layer=self.dc,
+                    target=target,
+                    mask=mask,
+                    coilmap=coilmap
+                )
+                
+                # Aggregate outputs from all scales
+                x = torch.cat((x, out), dim=1)
+                
+                # Aggregate decoder outputs for autoregressive loss
+                decoder_out.append(out[:,2:])
             
-            x2 = self.pssm2(
-                x1,
-                dc_layer=self.dc,
-                target=target,
-                mask=mask,
-                coilmap=coilmap
-            )
-            
-            x3 = self.pssm3(
-                torch.cat((x1, x2), dim=1),
-                dc_layer=self.dc,
-                target=target,
-                mask=mask,
-                coilmap=coilmap
-            )
-            
-            x = self.refinement(x3)
+            x = self.refinement(out)
             x = self.dc(x, target, mask, coilmap)
             
         # Extract scale-specific decoder outputs for the last cascade
-        decoder_out = torch.cat((x1[:,2:], x2[:,2:], x3[:,2:]), dim=1)
+        decoder_out = torch.cat(decoder_out, dim=1)
 
         return x, decoder_out
 
@@ -226,6 +217,7 @@ class MambaRollCT(MambaRoll):
     def __init__(self, **params):
         super().__init__(**params)
         self.dc = None
+        self.identity = Identity()
 
     def forward(self, x, s_target, theta, us_factor):
         # Create DC layer if does not exist
@@ -238,12 +230,23 @@ class MambaRollCT(MambaRoll):
             )
 
         for _ in range(self.nroll):
-            x1 = self.pssm1(x, dc_layer=self.dc, s_target=s_target)
-            x2 = self.pssm2(x1, dc_layer=self.dc, s_target=s_target)
-            x3 = self.pssm3(torch.cat((x1, x2), dim=1), dc_layer=self.dc, s_target=s_target)
-            x = self.refinement(x3)
+            # x1 = self.pssm1(x, dc_layer=self.dc, s_target=s_target)
+            decoder_out = []
+            for i, pssm in enumerate(self.pssms):
+                if i == 0:
+                    out = pssm(x, dc_layer=self.dc, s_target=s_target)
+                else:
+                    out = pssm(x, dc_layer=self.identity, s_target=s_target)
+                
+                # Aggregate outputs from all scales
+                x = torch.cat((x, out), dim=1)
+
+                # Aggregate decoder outputs for autoregressive loss
+                decoder_out.append(out[:,1:])
+
+            x = self.refinement(out)
 
         # Extract scale-specific decoder outputs for the last cascade
-        decoder_out = torch.cat((x1[:,1:], x2[:,1:], x3[:,1:]), dim=1)
+        decoder_out = torch.cat(decoder_out, dim=1)
 
         return x, decoder_out
