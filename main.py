@@ -26,8 +26,9 @@ class Runner(L.LightningModule):
         lr_min,
         optim_betas,
         use_eval_mask,
-        multiscale_loss,
-        multiscale_loss_weight
+        dmsd_loss,
+        loss_weights,
+        **kwargs
     ):
         super().__init__()
         self.save_hyperparameters(ignore="network")
@@ -37,8 +38,8 @@ class Runner(L.LightningModule):
         self.lr_min = lr_min
         self.optim_betas = optim_betas
         self.use_eval_mask = use_eval_mask
-        self.multiscale_loss = multiscale_loss
-        self.loss_weight = multiscale_loss_weight
+        self.dmsd_loss = dmsd_loss
+        self.loss_weights = loss_weights
 
         # Networks
         self.net = network
@@ -81,8 +82,10 @@ class Runner(L.LightningModule):
         """ Supervised MRI reconstruction training step """
         x_fs, x_us, mask, coilmap, _ = batch
 
+        if torch.is_complex(x_fs):
+            x_fs = torch.cat([x_fs.real, x_fs.imag], dim=1)
+
         # Supervised training
-        x_fs = torch.cat((x_fs.real, x_fs.imag), dim=1)
         x_us_cc = (torch.conj(coilmap) * x_us).sum(axis=1, keepdim=True)
 
         x_recon = self.net(
@@ -91,16 +94,16 @@ class Runner(L.LightningModule):
             mask=mask,
             coilmap=coilmap
         )
-        
+
         # Compute loss
-        if self.multiscale_loss:
-            loss = F.mse_loss(x_recon[0], x_fs)
-            loss += self.loss_weight * F.mse_loss(
+        loss = self.loss_weights[0] * F.l1_loss(x_recon[0], x_fs)
+
+        # Add deep multi-scale decoding (DMSD) loss
+        if self.dmsd_loss:
+            loss += self.loss_weights[1] * F.l1_loss(
                 x_recon[1],
                 x_fs.repeat(1, x_recon[1].shape[1]//x_fs.shape[1], 1, 1)
             )
-        else:
-            loss = F.mse_loss(x_recon, x_fs)
 
         # Logging
         self.log("loss", loss, on_epoch=True, prog_bar=True, sync_dist=True)
@@ -120,10 +123,7 @@ class Runner(L.LightningModule):
             target=x_us,
             mask=mask,
             coilmap=coilmap
-        )
-
-        if self.multiscale_loss:
-            x_recon = x_recon[0]
+        )[0]
 
         # Convert to complex
         x_recon = to_complex(x_recon)
@@ -153,10 +153,7 @@ class Runner(L.LightningModule):
             target=x_us,
             mask=mask,
             coilmap=coilmap
-        )
-
-        if self.multiscale_loss:
-            x_recon = x_recon[0]
+        )[0]
 
         # Convert to complex
         x_recon = to_complex(x_recon)
@@ -168,18 +165,23 @@ class Runner(L.LightningModule):
         x_fs, x_us, s_us, theta, us_factor, _ = batch
         
         # Prediction
-        x_recon = self.net(x_us, s_us, theta, us_factor[0])
-        
+        x_recon = self.net(
+            x=x_us,
+            s_target=s_us,
+            theta=theta,
+            us_factor=us_factor[0]
+        )
+
         # Compute loss
-        if self.multiscale_loss:
-            loss = F.mse_loss(x_recon[0], x_fs)
-            loss += self.loss_weight * F.mse_loss(
+        loss = self.loss_weights[0] * F.l1_loss(x_recon[0], x_fs)
+
+        # Add deep multi-scale decoding (DMSD) loss
+        if self.dmsd_loss:
+            loss += self.loss_weights[1] * F.l1_loss(
                 x_recon[1],
                 x_fs.repeat(1, x_recon[1].shape[1]//x_fs.shape[1], 1, 1)
             )
-        else:
-            loss = F.mse_loss(x_recon, x_fs)
-
+        
         # Logging
         self.log("loss", loss, on_epoch=True, prog_bar=True, sync_dist=True)
 
@@ -190,10 +192,15 @@ class Runner(L.LightningModule):
         x_fs, x_us, s_us, theta, us_factor, _ = batch
 
         # Prediction
-        x_recon = self.net(x_us, s_us, theta, us_factor[0])
+        x_recon = self.net(
+            x=x_us,
+            s_target=s_us,
+            theta=theta,
+            us_factor=us_factor[0]
+        )[0]
 
-        if self.multiscale_loss:
-            x_recon = x_recon[0]
+        # Clip
+        x_recon = x_recon.clip(0, x_recon.max())
 
         # Compute metrics
         metrics = compute_metrics(x_fs, x_recon)
@@ -205,15 +212,20 @@ class Runner(L.LightningModule):
         # Log sample images
         if batch_idx == 0 and self.global_rank == 0:
             path = os.path.join(self.logger.log_dir, "val_samples", f"epoch_{self.current_epoch}.png")
-            save_val_image(x_fs.abs(), x_us.abs(), x_recon.abs(), metrics, path)
+            save_val_image(x_fs, x_us, x_recon, metrics, path)
 
     def test_step_ct(self, batch, batch_idx):
         """ Supervised CT reconstruction test step """
         x_fs, x_us, s_us, theta, us_factor, _ = batch
-        x_recon = self.net(x_us, s_us, theta, us_factor[0])
+        x_recon = self.net(
+            x=x_us,
+            s_target=s_us,
+            theta=theta,
+            us_factor=us_factor[0]
+        )[0]
 
-        if self.multiscale_loss:
-            x_recon = x_recon[0]
+        # Clip
+        x_recon = x_recon.clip(0, x_recon.max())
             
         return x_recon
 
@@ -235,7 +247,6 @@ class Runner(L.LightningModule):
             dataset = self.trainer.datamodule.test_dataset
             source = dataset.image_us
             target = np.abs(dataset.image_fs)
-
 
             # Save predictions
             path = os.path.join(self.logger.log_dir, "test_samples", "pred.npy")
@@ -268,7 +279,7 @@ class Runner(L.LightningModule):
             save_eval_images(
                 source_images=source_images,
                 target_images=target[indices],
-                pred_images=pred[indices],
+                pred_images=pred[indices]*self.eval_mask[indices] if self.use_eval_mask else pred[indices],
                 psnrs=metrics["psnrs"][indices],
                 ssims=metrics["ssims"][indices],
                 save_path=os.path.join(self.logger.log_dir, "test_samples")

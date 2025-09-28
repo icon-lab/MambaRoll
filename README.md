@@ -115,7 +115,7 @@ A `us<us_factor>x.npz` file has the following keys:
 |-----------------------|----------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------|
 | `image_us`            | Undersampled CT image.                                                                                                     | n_slices x 1 x height x width                     |
 | `sinogram_us`         | Corresponding sinograms for undersampled CTs.                                                                              | n_slices x 1 x detector_positions x n_projections |
-| `projection_angles`   | Projection angles in degrees at which the Radon transform performed on fully-sampled images to obtain undersampled ones.   | n_slices x n_projections                          |
+| `projection_angles`   | Projection angles at which the Radon transform performed on fully-sampled images to obtain undersampled ones.              | n_slices x n_projections                          |
 | `subject_ids`         | Corresponding subject ID for each slice.                                                                                   | n_slices                                          |
 | `us_factor`           | Undersampling factor.                                                                                                      | (Single integer value)                            |
 

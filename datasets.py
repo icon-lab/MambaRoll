@@ -44,17 +44,7 @@ class MRIDataset(Dataset):
         return data
     
     def _load_mask(self):
-        mask_path = os.path.join(self.data_dir, 'mask', self.stage)
-        files = [f for f in os.listdir(mask_path) if f.endswith('.npy')]
-
-        # Sort by slice index
-        files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
-
-        data = []
-        for file in files:
-            data.append(np.load(os.path.join(mask_path, file)))
-        
-        return np.array(data).astype(np.float32)
+        return (np.abs(self.coilmaps).sum(1)>0).astype(np.float32)
 
     def __len__(self):
         return len(self.image_fs)
@@ -77,13 +67,13 @@ class CTDataset(Dataset):
         self.name = os.path.basename(os.path.normpath(data_dir))
         self.main_dir = os.path.join(data_dir, stage)
         
-        data_fs, data_us = self._load_data()
-        self.image_fs = data_fs['image_fs']
-        self.image_us = data_us['image_us']
-        self.sinogram_us = data_us['sinogram_us']
-        self.theta = data_us['projection_angles']
-        self.subject_ids = data_us['subject_ids']
-        self.us_factor = data_us['us_factor']
+        self.data_fs, self.data_us = self._load_data()
+        self.image_fs = self.data_fs['image_fs']
+        self.image_us = self.data_us['image_us']
+        self.sinogram_us = self.data_us['sinogram_us']
+        self.theta = self.data_us['projection_angles']
+        self.subject_ids = self.data_us['subject_ids']
+        self.us_factor = self.data_us['us_factor']
 
         # Normalize
         denom = self.image_fs.max(axis=(-1,-2), keepdims=True)
@@ -96,6 +86,9 @@ class CTDataset(Dataset):
         us_data = np.load(os.path.join(self.data_dir, self.stage, f'us{self.us_factor}x.npz'))
         return fs_data, us_data
 
+    def _load_mask(self):
+        return self.data_fs['eval_mask']
+    
     @property
     def image_size(self):
         return self.image_fs.shape[-2:]

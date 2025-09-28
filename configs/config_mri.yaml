@@ -35,6 +35,7 @@ trainer:
   inference_mode: True
   use_distributed_sampler: True
   sync_batchnorm: True
+  gradient_clip_val: 0.5
 
 model:
   mode: mri
@@ -43,8 +44,8 @@ model:
   lr: 2.e-4                             # Maximum Learning rate for cosine annealing
   lr_min: 1.e-5                         # Minimum learning rate for cosine annealing
   optim_betas: [0.9, 0.999]             # Adam optimizer betas
-  multiscale_loss: True                 # Whether to use multiscale loss
-  multiscale_loss_weight: 0.1           # Weight for multiscale loss
+  dmsd_loss: True                       # Whether to use deeo multi-scale decoding loss
+  loss_weights: [3.0, 1.0]              # (Reconstruction, Autoregressive) loss weights
   use_eval_mask: False                  # Whether to use mask during test
 
 data:
@@ -70,4 +71,5 @@ model_configs:
       model_channels: [96, 48, 24]
       scales: [0.25, 0.5, 1]
       shuffle_factors: [4, 4, 4]
-      d_state: 64
+      d_state: 16
+      dropout: 0.0
